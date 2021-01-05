@@ -475,7 +475,7 @@ class Lstmbidirect(models.BaseModel):
         vocab_size=vocab_size,
         **unused_params)
 
-class GRUbidirect_branchedBN_attention(models.BaseModel):
+class GRUbidirect_branchedBN(models.BaseModel):
     """Creates a GRU branched model acompanied by a simple attention mechanism."""
     def create_model(self,
                      model_input,
@@ -548,10 +548,9 @@ class GRUbidirect_branchedBN_attention(models.BaseModel):
 
             activation = tf.multiply(activation, gates)
 
-            outputs_attention_mask=slim.fully_connected(activation,1)
-            outputs_attention_mask=tf.nn.softmax(outputs_attention_mask,axis=1)
-            activation=activation*outputs_attention_mask
-            #activation=tf.math.reduce_sum(activation*outputs_attention_mask,axis=1)
+        #outputs_attention_mask=slim.fully_connected(activation,1)
+        #outputs_attention_mask=tf.nn.softmax(outputs_attention_mask,axis=1)
+        #activation=activation*outputs_attention_mask
 
         aggregated_model = getattr(video_level_models,
                                    FLAGS.video_level_classifier_model)
@@ -561,4 +560,70 @@ class GRUbidirect_branchedBN_attention(models.BaseModel):
             vocab_size=vocab_size,
             is_training=is_training,
             **unused_params)
+
+
+class GRUbidirect_branchedBN_attention(models.BaseModel):
+    """Creates a GRU branched model acompanied by a simple attention mechanism."""
+    def create_model(self,
+                     model_input,
+                     vocab_size,
+                     num_frames,
+                     is_training=True,
+                     **unused_params):
+        video_in = model_input[:, :, :1024]
+        audio_in = model_input[:, :, 1024:]
+
+        video_bn = slim.batch_norm(
+            video_in,
+            center=True,
+            scale=True,
+            is_training=is_training,
+            scope="video_input_bn")
+        audio_bn = slim.batch_norm(
+            audio_in,
+            center=True,
+            scale=True,
+            is_training=is_training,
+            scope="audio_input_bn")
+
+        # Transform input
+        activation_video = slim.fully_connected(video_bn, 1024, activation_fn=None, biases_initializer=None)
+        activation_audio = slim.fully_connected(audio_bn, 128, activation_fn=None, biases_initializer=None)
+
+        activation_video = slim.batch_norm(
+            activation_video,
+            center=True,
+            scale=True,
+            is_training=is_training,
+            scope="video_cluster_bn")
+        activation_audio = slim.batch_norm(
+            activation_audio,
+            center=True,
+            scale=True,
+            is_training=is_training,
+            scope="audio_cluster_bn")
+
+        activation_video = tf.nn.relu6(activation_video)
+        activation_audio = tf.nn.relu6(activation_audio)
+
+        outputs_video, state_video = bidirect_process(activation_video, 1024, num_frames, scope_name="video")
+        outputs_audio, state_audio = bidirect_process(activation_audio, 128, num_frames, scope_name="audio")
+
+        outputs_concat=tf.concat([outputs_video, outputs_audio], axis=-1)
+
+
+        outputs_attention_mask=slim.fully_connected(outputs_concat,1)
+        outputs_attention_mask=tf.nn.softmax(outputs_attention_mask,axis=1)
+        activation=outputs_concat*outputs_attention_mask
+        activation=tf.reduce_sum(activation,axis=[1])
+
+        aggregated_model = getattr(video_level_models,
+                                   FLAGS.video_level_classifier_model)
+
+        return aggregated_model().create_model(
+            model_input=activation,
+            vocab_size=vocab_size,
+            is_training=is_training,
+            **unused_params)
+
 
