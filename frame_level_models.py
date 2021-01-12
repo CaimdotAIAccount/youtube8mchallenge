@@ -23,6 +23,7 @@ import model_utils as utils
 
 import tensorflow.contrib.slim as slim
 from tensorflow import flags
+import loupe as lp 
 
 FLAGS = flags.FLAGS
 flags.DEFINE_integer("iterations", 30,
@@ -348,6 +349,39 @@ def bidirect_process(pipe_input, n_cells, num_frames, scope_name):
     return outputs, state
 
 
+def multi_head_attention(input_tensor,n_heads=1,embed_dim=512):
+
+  batch_size=tf.shape(input_tensor)[0]
+  max_frames=tf.shape(input_tensor)[1]
+  projection_dim=embed_dim//n_heads 
+  query,key,value=input_tensor,input_tensor,input_tensor 
+  query=slim.fully_connected(query, embed_dim)
+  key=slim.fully_connected(key,embed_dim)
+  value=slim.fully_connected(value,embed_dim)
+  
+  # Reshaping for Multi Head Attention 
+  query=tf.reshape(query,[batch_size,-1,max_frames,projection_dim])
+  query=tf.transpose(query, perm=[0, 2, 1, 3])
+
+  key=tf.reshape(key,[batch_size,-1,max_frames,projection_dim])
+  key=tf.transpose(key, perm=[0, 2, 1, 3])
+
+  value=tf.reshape(value,[batch_size,-1,max_frames,projection_dim])
+  value=tf.transpose(value, perm=[0, 2, 1, 3])
+
+  #Multi Head Weight Calculation 
+  score=tf.matmul(query,key,transpose_b=True)
+  dim_key=tf.cast(tf.shape(key)[-1],tf.float32) 
+  score/=tf.math.sqrt(dim_key)
+  weights=tf.nn.softmax(score,axis=-1)
+  output=tf.matmul(weights, value)
+
+  return output 
+
+
+
+
+
 class GRUbidirect_branchedBN(models.BaseModel):
     def create_model(self,
                      model_input,
@@ -612,18 +646,21 @@ class GRUbidirect_branchedBN_attention(models.BaseModel):
         outputs_concat=tf.concat([outputs_video, outputs_audio], axis=-1)
 
 
-        outputs_attention_mask=slim.fully_connected(outputs_concat,1)
+        """outputs_attention_mask=slim.fully_connected(outputs_concat,1)
         outputs_attention_mask=tf.nn.softmax(outputs_attention_mask,axis=1)
         activation=outputs_concat*outputs_attention_mask
-        activation=tf.reduce_sum(activation,axis=[1])
+        activation=tf.reduce_sum(activation,axis=[1])"""
+
+        activation=multi_head_attention(outputs_concat)
 
         aggregated_model = getattr(video_level_models,
                                    FLAGS.video_level_classifier_model)
-
+        
         return aggregated_model().create_model(
             model_input=activation,
             vocab_size=vocab_size,
             is_training=is_training,
             **unused_params)
+        
 
 
